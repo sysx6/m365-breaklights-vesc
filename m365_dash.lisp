@@ -78,6 +78,9 @@
 ; Brake light state
 (def brake-light-on 0)
 
+; Configure GPIO12 (FAN port) as output for brake lights
+(gpio-configure 12 'pin-mode-out)
+
 (if (= software-adc 1)
     (app-adc-detach 3 1)
     (app-adc-detach 3 0)
@@ -90,7 +93,7 @@
                 (if (= brake-light-on 0)
                     {
                         (set 'brake-light-on 1)
-                        (set-fan-duty 1) ; Turn on FAN at full power for brake lights
+                        (gpio-write 12 1) ; Turn on GPIO12 (FAN port) for brake lights
                     }
                 )
             }
@@ -98,7 +101,7 @@
                 (if (= brake-light-on 1)
                     {
                         (set 'brake-light-on 0)
-                        (set-fan-duty 0.0) ; Turn off FAN when brake is released
+                        (gpio-write 12 0) ; Turn off GPIO12 (FAN port) when brake is released
                     }
                 )
             }
@@ -143,7 +146,7 @@
                     (set-current 0)
                     ; Turn off brake lights when scooter is off
                     (set 'brake-light-on 0)
-                    (set-fan-duty 0.0)
+                    (gpio-write 12 0)
                     ;(loopforeach i (can-list-devs)
                     ;    (canset-current i 0)
                     ;)
@@ -455,4 +458,4 @@
 
 ; Spawn UART reading frames thread
 (spawn 150 read-frames)
-(button-logic) ; Start button logic in main thread - this will block the main thread 
+(button-logic) ; Start button logic in main thread - this will block the main thread
