@@ -124,9 +124,6 @@
                 (if (> brake 3.3)
                     (setf brake 3.3))
                 
-                ; Control brake lights based on brake input
-                (control-brake-lights brake)
-                
                 ; Pass through throttle and brake to VESC
                 (app-adc-override 0 throttle)
                 (app-adc-override 1 brake)
@@ -137,6 +134,11 @@
 
 (defun handle-features()
     {
+        ; Control brake lights using actual ADC values
+        (if (= off 0) ; Only control brake lights when scooter is on
+            (control-brake-lights (get-adc-decoded 1))
+        )
+        
         (if (or (or (= off 1) (= lock 1) (< (* (get-speed) 3.6) min-speed)))
             (if (not (app-is-output-disabled)) ; Disable output when scooter is turned off
                 {
