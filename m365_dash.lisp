@@ -79,7 +79,7 @@
 (def brake-light-on 0)
 
 ; Configure GPIO12 (FAN port) as output for brake lights
-(gpio-configure 'pin-12 'pin-mode-out)
+(gpio-configure 'pin-ppm 'pin-mode-out)
 
 (if (= software-adc 1)
     (app-adc-detach 3 1)
@@ -93,7 +93,7 @@
                 (if (= brake-light-on 0)
                     {
                         (set 'brake-light-on 1)
-                        (gpio-write 'pin-12 1) ; Turn on GPIO12 (FAN port) for brake lights
+                        (gpio-write 'pin-ppm 1) ; Turn on GPIO12 (FAN port) for brake lights
                     }
                 )
             }
@@ -101,7 +101,7 @@
                 (if (= brake-light-on 1)
                     {
                         (set 'brake-light-on 0)
-                        (gpio-write 'pin-12 0) ; Turn off GPIO12 (FAN port) when brake is released
+                        (gpio-write 'pin-ppm 0) ; Turn off GPIO12 (FAN port) when brake is released
                     }
                 )
             }
@@ -146,7 +146,7 @@
                     (set-current 0)
                     ; Turn off brake lights when scooter is off
                     (set 'brake-light-on 0)
-                    (gpio-write 'pin-12 0)
+                    (gpio-write 'pin-ppm 0)
                     ;(loopforeach i (can-list-devs)
                     ;    (canset-current i 0)
                     ;)
