@@ -1,4 +1,5 @@
-; M365 dashboard compability lisp script v1.0 by Netzpfuscher and 1zuna
+; M365 dashboard compability lisp script v2.0 by Netzpfuscher and 1zuna
+; Added AUX brake functionality
 ; UART Wiring: red=5V black=GND yellow=COM-TX (UART-HDX) green=COM-RX (button)+3.3V with 1K Resistor
 ; Guide (German): https://rollerplausch.com/threads/vesc-controller-einbau-1s-pro2-g30.6032/
  
@@ -11,8 +12,10 @@
 (def min-speed 1)
 (def button-safety-speed (/ 0.1 3.6)) ; disabling button above 0.1 km/h (due to safety reasons)
 
-; Brake light parameters
-(def brake-light-threshold 0.2) ; Brake threshold to trigger rear lights (adjust as needed)
+; AUX brake parameters
+(def aux-brake-enabled 1) ; Enable AUX brake functionality
+(def aux-brake-port 1) ; AUX port to use for brake signal
+(def aux-brake-threshold 0.3) ; Minimum brake value to trigger AUX
 
 ; Speed modes (km/h, watts, current scale)
 (def eco-speed (/ 7 3.6))
@@ -45,7 +48,7 @@
 
 ; -> Code starts here (DO NOT CHANGE ANYTHING BELOW THIS LINE IF YOU DON'T KNOW WHAT YOU ARE DOING)
 
-; Load VESC CAN code serer
+; Load VESC CAN code server
 (import "pkg@://vesc_packages/lib_code_server/code_server.vescpkg" 'code-server)
 (read-eval-program code-server)
 
@@ -59,12 +62,10 @@
 (def uart-buf (array-create 64))
 
 ; Button handling
-
 (def presstime (systime))
 (def presses 0)
 
 ; Mode states
-
 (def off 0)
 (def lock 0)
 (def speedmode 4)
@@ -72,42 +73,40 @@
 (def unlock 0)
 
 ; Sound feedback
-
 (def feedback 0)
 
-; Brake light state
-(def brake-light-on 0)
-
-; FAN port brake lights - controlled via PWM in VESC 6.05
-; No GPIO configuration needed for FAN port
+; AUX brake state
+(def aux-brake-active 0)
 
 (if (= software-adc 1)
     (app-adc-detach 3 1)
     (app-adc-detach 3 0)
 )
 
-(defun control-brake-lights(brake-value)
-    {
-        (if (> brake-value brake-light-threshold)
-            {
-                (if (= brake-light-on 0)
-                    {
-                        (set 'brake-light-on 1)
-                        (set-fan-duty 1.0) ; Turn on FAN port for brake lights
-                    }
-                )
-            }
-            {
-                (if (= brake-light-on 1)
-                    {
-                        (set 'brake-light-on 0)
-                        (set-fan-duty 0.0) ; Turn off FAN port when brake is released
-                    }
-                )
-            }
+; AUX brake function
+(defun set-auxtime (port state time) {
+    (set-aux port state)
+    (sleep time)
+})
+
+(defun handle-aux-brake (brake-value) {
+    (if (= aux-brake-enabled 1)
+        (if (> brake-value aux-brake-threshold)
+            (if (= aux-brake-active 0)
+                {
+                    (set-aux aux-brake-port 1)
+                    (set 'aux-brake-active 1)
+                }
+            )
+            (if (= aux-brake-active 1)
+                {
+                    (set-aux aux-brake-port 0)
+                    (set 'aux-brake-active 0)
+                }
+            )
         )
-    }
-)
+    )
+})
 
 (defun adc-input(buffer) ; Frame 0x65
     {
@@ -124,6 +123,9 @@
                 (if (> brake 3.3)
                     (setf brake 3.3))
                 
+                ; Handle AUX brake functionality
+                (handle-aux-brake brake)
+                
                 ; Pass through throttle and brake to VESC
                 (app-adc-override 0 throttle)
                 (app-adc-override 1 brake)
@@ -134,11 +136,6 @@
 
 (defun handle-features()
     {
-        ; Control brake lights using actual ADC values
-        (if (= off 0) ; Only control brake lights when scooter is on
-            (control-brake-lights (get-adc-decoded 1))
-        )
-        
         (if (or (or (= off 1) (= lock 1) (< (* (get-speed) 3.6) min-speed)))
             (if (not (app-is-output-disabled)) ; Disable output when scooter is turned off
                 {
@@ -146,9 +143,13 @@
                     (app-adc-override 1 0)
                     (app-disable-output -1)
                     (set-current 0)
-                    ; Turn off brake lights when scooter is off
-                    (set 'brake-light-on 0)
-                    (set-fan-duty 0.0)
+                    ; Turn off AUX brake when scooter is off
+                    (if (= aux-brake-active 1)
+                        {
+                            (set-aux aux-brake-port 0)
+                            (set 'aux-brake-active 0)
+                        }
+                    )
                     ;(loopforeach i (can-list-devs)
                     ;    (canset-current i 0)
                     ;)
@@ -460,4 +461,4 @@
 
 ; Spawn UART reading frames thread
 (spawn 150 read-frames)
-(button-logic) ; Start button logic in main thread - this will block the main thread
+(button-logic) ; Start button logic in main thread - this will block the main thread 
