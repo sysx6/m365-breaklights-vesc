@@ -1,10 +1,8 @@
-; M365 dashboard compability lisp script v1.0 with M365 Brake Light - SAFE VERSION v2
+; M365 dashboard compability lisp script v1.0 with M365 Brake Light - SAFE VERSION
 ; Based on original v1.0 by Netzpfuscher and 1zuna
 ; Added AUX brake light functionality that works with M365 display brake signal
-; IMPROVED SAFETY FEATURES: 
-; - Throttle cutoff with hysteresis to prevent flickering
-; - Better signal filtering
-; - Clearer logging of throttle vs brake duty cycles
+; ADDED SAFETY FEATURE: Throttle is completely cut off when brake is active
+; Modified for dual VESC setup (front and rear motors)
 ; UART Wiring: red=5V black=GND yellow=COM-TX (UART-HDX) green=COM-RX (button)+3.3V with 1K Resistor
 
 ; -> User parameters (change these to your needs)
@@ -20,16 +18,10 @@
 (def aux-brake-enabled 1) ; Enable/disable M365 brake light functionality
 (def aux-brake-port 1) ; AUX port for brake light
 (def m365-brake-threshold 0.3) ; Threshold for M365 brake signal (in volts)
-(def m365-brake-hysteresis 0.1) ; Hysteresis to prevent flickering (release threshold = threshold - hysteresis)
 
-; Safety parameters with improved hysteresis
-(def brake-cutoff-threshold 0.15) ; Throttle cutoff threshold
-(def brake-cutoff-release-threshold 0.1) ; Release threshold (prevents flickering)
+; Safety parameters
+(def brake-cutoff-threshold 0.15) ; Throttle cutoff threshold (slightly higher than min-adc-brake for safety)
 (def brake-cutoff-enabled 1) ; Enable/disable throttle cutoff safety feature
-
-; Signal filtering
-(def brake-filter-alpha 0.3) ; Low-pass filter coefficient (0.0 = no filtering, 1.0 = no response)
-(def throttle-filter-alpha 0.2) ; Low-pass filter coefficient for throttle
 
 ; Speed modes (km/h, watts, current scale)
 (def eco-speed (/ 7 3.6))
@@ -40,25 +32,25 @@
 (def drive-current 0.7)
 (def drive-watts 500)
 (def drive-fw 0)
-(def sport-speed (/ 21 3.6))
+(def sport-speed (/ 25 3.6))
 (def sport-current 1.0)
-(def sport-watts 15000) ; Updated to 15kW
+(def sport-watts 700)
 (def sport-fw 0)
 
 ; Secret speed modes. To enable, press the button 2 times while holding break and throttle at the same time.
 (def secret-enabled 1)
-(def secret-eco-speed (/ 27 3.6))
+(def secret-eco-speed (/ 15 3.6)) ; 15 km/h
 (def secret-eco-current 0.8)
-(def secret-eco-watts 1200)
+(def secret-eco-watts 800)
 (def secret-eco-fw 0)
-(def secret-drive-speed (/ 47 3.6))
+(def secret-drive-speed (/ 25 3.6)) ; 25 km/h
 (def secret-drive-current 0.9)
-(def secret-drive-watts 1500)
+(def secret-drive-watts 1000)
 (def secret-drive-fw 0)
-(def secret-sport-speed (/ 1000 3.6)) ; 1000 km/h easy
+(def secret-sport-speed (/ 35 3.6)) ; 35 km/h - SAFE MAXIMUM
 (def secret-sport-current 1.0)
-(def secret-sport-watts 1500000)
-(def secret-sport-fw 10)
+(def secret-sport-watts 1200)
+(def secret-sport-fw 0)
 
 ; -> Code starts here (DO NOT CHANGE ANYTHING BELOW THIS LINE IF YOU DON'T KNOW WHAT YOU ARE DOING)
 
@@ -92,45 +84,33 @@
 ; Safety state variables
 (def throttle-cutoff-active 0)
 (def last-throttle-cutoff-time 0)
-(def safety-activation-count 0)
-
-; Signal filtering variables
-(def filtered-brake-value 0)
-(def filtered-throttle-value 0)
-(def last-raw-brake 0)
-(def last-raw-throttle 0)
 
 (if (= software-adc 1)
     (app-adc-detach 3 1)
     (app-adc-detach 3 0)
 )
 
-; Signal filtering function
-(defun apply-filter (current-value last-filtered alpha) {
-    (+ (* alpha current-value) (* (- 1.0 alpha) last-filtered))
-})
-
-; M365 brake light handler with hysteresis
+; M365 brake light handler
 (defun handle-m365-brake-light (brake-value) {
     (if (= aux-brake-enabled 1)
         {
             (set 'last-m365-brake-value brake-value)
 
-            (if (= aux-brake-active 0)
-                ; Light is OFF - check if we should turn it ON
-                (if (> brake-value m365-brake-threshold)
+            (if (> brake-value m365-brake-threshold)
+                ; Brake triggered - turn on light
+                (if (= aux-brake-active 0)
                     {
                         (set-aux aux-brake-port 1)
                         (set 'aux-brake-active 1)
-                        (print (str-from-n brake-value "M365 Brake LIGHT ON - Value: %.2fV"))
+                        (print (str-from-n brake-value "M365 Brake ON - Value: %.2fV"))
                     }
                 )
-                ; Light is ON - check if we should turn it OFF (with hysteresis)
-                (if (< brake-value (- m365-brake-threshold m365-brake-hysteresis))
+                ; Brake released - turn off light
+                (if (= aux-brake-active 1)
                     {
                         (set-aux aux-brake-port 0)
                         (set 'aux-brake-active 0)
-                        (print (str-from-n brake-value "M365 Brake LIGHT OFF - Value: %.2fV"))
+                        (print (str-from-n brake-value "M365 Brake OFF - Value: %.2fV"))
                     }
                 )
             )
@@ -138,32 +118,33 @@
     )
 })
 
-; Improved throttle cutoff safety handler with hysteresis
+; Throttle cutoff safety handler
 (defun handle-throttle-cutoff (brake-value throttle-value) {
     (if (= brake-cutoff-enabled 1)
         {
-            (if (= throttle-cutoff-active 0)
-                ; Cutoff is OFF - check if we should activate it
-                (if (> brake-value brake-cutoff-threshold)
+            (if (> brake-value brake-cutoff-threshold)
+                ; Brake is active - cut off throttle
+                (if (= throttle-cutoff-active 0)
                     {
                         (set 'throttle-cutoff-active 1)
                         (set 'last-throttle-cutoff-time (systime))
-                        (set 'safety-activation-count (+ safety-activation-count 1))
-                        (print (str-from-n brake-value "SAFETY: THROTTLE CUTOFF ACTIVATED - Brake: %.2fV"))
-                        (print (str-from-n throttle-value "SAFETY: Original throttle was: %.2fV"))
+                        (if (> throttle-value 0.1)
+                            (print (str-from-n brake-value "SAFETY: Throttle cutoff activated - Brake: %.2fV"))
+                        )
                         0 ; Return 0 throttle
                     }
-                    throttle-value ; Return original throttle
+                    0 ; Already active, return 0 throttle
                 )
-                ; Cutoff is ON - check if we should deactivate it (with hysteresis)
-                (if (< brake-value brake-cutoff-release-threshold)
-                    {
-                        (set 'throttle-cutoff-active 0)
-                        (print (str-from-n brake-value "SAFETY: THROTTLE CUTOFF DEACTIVATED - Brake: %.2fV"))
-                        throttle-value ; Return original throttle
-                    }
-                    0 ; Still active, return 0 throttle
-                )
+                ; Brake is not active - allow throttle
+                {
+                    (if (= throttle-cutoff-active 1)
+                        {
+                            (set 'throttle-cutoff-active 0)
+                            (print "SAFETY: Throttle cutoff deactivated")
+                        }
+                    )
+                    throttle-value ; Return original throttle value
+                }
             )
         }
         throttle-value ; Safety disabled, return original throttle
@@ -187,7 +168,6 @@
 (defun get-m365-brake-status () {
     (print "=== M365 Brake Light Status ===")
     (print (str-from-n last-m365-brake-value "Last M365 brake value: %.2fV"))
-    (print (str-from-n filtered-brake-value "Filtered brake value: %.2fV"))
     (print (str-from-n aux-brake-active "AUX brake light active: %d"))
     (print (str-from-n m365-brake-threshold "M365 brake threshold: %.2fV"))
     (print (str-from-n aux-brake-enabled "Brake light enabled: %d"))
@@ -198,65 +178,34 @@
     (print "=== Safety Status ===")
     (print (str-from-n brake-cutoff-enabled "Throttle cutoff enabled: %d"))
     (print (str-from-n brake-cutoff-threshold "Brake cutoff threshold: %.2fV"))
-    (print (str-from-n brake-cutoff-release-threshold "Brake cutoff release threshold: %.2fV"))
     (print (str-from-n throttle-cutoff-active "Throttle cutoff active: %d"))
-    (print (str-from-n safety-activation-count "Safety activations: %d"))
     (print (str-from-n (/ (- (systime) last-throttle-cutoff-time) 1000) "Time since last cutoff: %.1fs"))
     (print "=====================")
-})
-
-(defun get-signal-status () {
-    (print "=== Signal Status ===")
-    (print (str-from-n last-raw-brake "Raw brake: %.2fV"))
-    (print (str-from-n filtered-brake-value "Filtered brake: %.2fV"))
-    (print (str-from-n last-raw-throttle "Raw throttle: %.2fV"))
-    (print (str-from-n filtered-throttle-value "Filtered throttle: %.2fV"))
-    (print (str-from-n (get-duty) "Current duty cycle: %.2f"))
-    (print (str-from-n (get-current) "Current motor current: %.2fA"))
-    (print "====================")
 })
 
 (defun adc-input(buffer) ; Frame 0x65
     {
         (let ((current-speed (* (get-speed) 3.6))
-            (raw-throttle (/(bufget-u8 uart-buf 4) 77.2)) ; 255/3.3 = 77.2
-            (raw-brake (/(bufget-u8 uart-buf 5) 77.2)))
+            (throttle (/(bufget-u8 uart-buf 4) 77.2)) ; 255/3.3 = 77.2
+            (brake (/(bufget-u8 uart-buf 5) 77.2)))
             {
-                ; Clamp raw values
-                (if (< raw-throttle 0)
-                    (setf raw-throttle 0))
-                (if (> raw-throttle 3.3)
-                    (setf raw-throttle 3.3))
-                (if (< raw-brake 0)
-                    (setf raw-brake 0))
-                (if (> raw-brake 3.3)
-                    (setf raw-brake 3.3))
+                (if (< throttle 0)
+                    (setf throttle 0))
+                (if (> throttle 3.3)
+                    (setf throttle 3.3))
+                (if (< brake 0)
+                    (setf brake 0))
+                (if (> brake 3.3)
+                    (setf brake 3.3))
 
-                ; Store raw values for monitoring
-                (set 'last-raw-throttle raw-throttle)
-                (set 'last-raw-brake raw-brake)
-
-                ; Apply signal filtering
-                (set 'filtered-throttle-value (apply-filter raw-throttle filtered-throttle-value throttle-filter-alpha))
-                (set 'filtered-brake-value (apply-filter raw-brake filtered-brake-value brake-filter-alpha))
-
-                ; Use filtered values for control logic
-                (var throttle filtered-throttle-value)
-                (var brake filtered-brake-value)
-
-                ; Handle M365 brake light based on filtered brake signal
+                ; Handle M365 brake light based on brake signal from display
                 (handle-m365-brake-light brake)
 
                 ; SAFETY FEATURE: Apply throttle cutoff when brake is active
-                (var safe-throttle (handle-throttle-cutoff brake throttle))
-
-                ; Debug output (uncomment for detailed logging)
-                ; (if (> brake 0.1)
-                ;     (print (str-from-n brake "Brake: %.2fV") (str-from-n safe-throttle " SafeThrottle: %.2fV"))
-                ; )
+                (set 'throttle (handle-throttle-cutoff brake throttle))
 
                 ; Pass through processed throttle and brake to VESC
-                (app-adc-override 0 safe-throttle)
+                (app-adc-override 0 throttle)
                 (app-adc-override 1 brake)
             }
         )
@@ -413,8 +362,8 @@
         )
         (if (>= presses 2) ; double press
             {
-                (if (> (get-adc 1) min-adc-brake) ; if brake is pressed
-                    (if (and (= secret-enabled 1) (> (get-adc 0) min-adc-throttle))
+                (if (> (get-adc-decoded 1) min-adc-brake) ; if brake is pressed
+                    (if (and (= secret-enabled 1) (> (get-adc-decoded 0) min-adc-throttle))
                         {
                             (set 'unlock (bitwise-xor unlock 1))
                             (set 'feedback 2) ; beep 2x
@@ -493,12 +442,115 @@
 
 (defun configure-speed(speed watts current fw)
     {
+        ; Configure local VESC (primary controller)
         (conf-set 'max-speed speed)
         (conf-set 'l-watt-max watts)
         (conf-set 'l-current-max-scale current)
         (conf-set 'foc-fw-current-max fw)
+        
+        ; Configure secondary VESC via CAN bus using standard CAN commands
+        (var can-devices (can-list-devs))
+        (if (> (length can-devices) 0)
+            {
+                (loopforeach id can-devices
+                    {
+                        ; Set speed limit on secondary VESC
+                        (canset-current id (* current 50)) ; Convert scale to actual current
+                        (canset-watt id watts)
+                        (canset-speed id speed)
+                    }
+                )
+                (print (str-from-n (length can-devices) "Configured %d secondary VESC(s) via CAN"))
+            }
+            (print "No secondary VESC found on CAN bus")
+        )
+        
+        ; Apply settings immediately on local VESC
+        (conf-store)
+        
+        ; Print current mode for debugging
+        (print (str-from-n speed "Speed mode applied - Max speed: %.1f km/h"))
+        (print (str-from-n watts "Power limit: %.0f watts"))
+        (print (str-from-n current "Current scale: %.1f"))
     }
 )
+
+; Function to check current speed mode status
+(defun get-speed-mode-status () {
+    (print "=== Speed Mode Status ===")
+    (print (str-from-n speedmode "Current speed mode: %d"))
+    (print (str-from-n unlock "Secret mode enabled: %d"))
+    (print "--- Primary VESC ---")
+    (print (str-from-n (conf-get 'max-speed) "Max speed: %.1f m/s"))
+    (print (str-from-n (conf-get 'l-watt-max) "Max watts: %.0f"))
+    (print (str-from-n (conf-get 'l-current-max-scale) "Current scale: %.1f"))
+    
+    ; Check secondary VESC(s) via CAN
+    (var can-devices (can-list-devs))
+    (if (> (length can-devices) 0)
+        {
+            (print "--- Secondary VESC(s) ---")
+            (loopforeach id can-devices
+                {
+                    (print (str-from-n id "VESC ID %d:"))
+                    (var sec-speed (canget-speed id))
+                    (var sec-watts (canget-watt id))
+                    (var sec-current (/ (canget-current id) 50)) ; Convert back to scale
+                    (print (str-from-n sec-speed "  Current speed: %.1f m/s"))
+                    (print (str-from-n sec-watts "  Current watts: %.0f"))
+                    (print (str-from-n sec-current "  Current scale: %.1f"))
+                }
+            )
+        }
+        (print "No secondary VESC found on CAN bus")
+    )
+    (print "========================")
+})
+
+; Function to check CAN bus and VESC communication
+(defun check-can-status () {
+    (print "=== CAN Bus Status ===")
+    (var can-devices (can-list-devs))
+    (print (str-from-n (length can-devices) "Found %d VESC device(s) on CAN bus"))
+    
+    (if (> (length can-devices) 0)
+        {
+            (loopforeach id can-devices
+                {
+                    (print (str-from-n id "VESC ID %d:"))
+                    (var temp (canget-temp-fet id))
+                    (var batt (canget-batt id))
+                    (var speed (canget-speed id))
+                    (print (str-from-n temp "  FET temp: %.1f°C"))
+                    (print (str-from-n batt "  Battery: %.2f"))
+                    (print (str-from-n speed "  Speed: %.1f m/s"))
+                }
+            )
+        }
+        (print "No VESC devices found on CAN bus")
+    )
+    (print "=====================")
+})
+
+; Function to manually test speed mode switching
+(defun test-speed-mode-switch () {
+    (print "Testing speed mode switching...")
+    (print "Current mode before switch:")
+    (get-speed-mode-status)
+    
+    ; Cycle through modes
+    (cond
+        ((= speedmode 1) (set 'speedmode 4))
+        ((= speedmode 2) (set 'speedmode 1))
+        ((= speedmode 4) (set 'speedmode 2))
+    )
+    
+    (apply-mode)
+    (sleep 0.5)
+    
+    (print "Mode after switch:")
+    (get-speed-mode-status)
+})
 
 (defun button-logic()
     {
@@ -563,33 +615,25 @@
 ; Initialize safety systems
 (set 'throttle-cutoff-active 0)
 (set 'last-throttle-cutoff-time 0)
-(set 'safety-activation-count 0)
-
-; Initialize signal filtering
-(set 'filtered-brake-value 0)
-(set 'filtered-throttle-value 0)
-(set 'last-raw-brake 0)
-(set 'last-raw-throttle 0)
 
 ; Apply mode on start-up
 (apply-mode)
 
 ; Print startup message
-(print "M365 Dashboard V1 with M365 Brake Light - SAFE VERSION v2")
-(print "IMPROVED SAFETY FEATURES:")
-(print "- Throttle cutoff with hysteresis (no flickering)")
-(print "- Signal filtering for stable operation")
-(print "- Better brake light control")
-(print "- Enhanced debugging capabilities")
+(print "M365 Dashboard V1 with M365 Brake Light - SAFE VERSION")
+(print "SAFETY FEATURE: Throttle cutoff when brake is active")
+(print "Brake light triggered by M365 display brake signal")
+(print "Single VESC setup (no CAN required)")
 (print "Commands:")
 (print "  (test-m365-brake-light 0.5) - Test brake light")
 (print "  (test-throttle-cutoff 0.4 1.0) - Test throttle cutoff")
 (print "  (get-m365-brake-status) - Check brake status")
 (print "  (get-safety-status) - Check safety status")
-(print "  (get-signal-status) - Check signal values and motor status")
+(print "  (get-speed-mode-status) - Check speed mode status")
+(print "  (check-can-status) - Check CAN bus and VESC communication")
+(print "  (test-speed-mode-switch) - Test speed mode switching")
 (print "  (set 'brake-cutoff-enabled 0) - Disable throttle cutoff")
 (print "  (set 'brake-cutoff-threshold 0.2) - Change cutoff threshold")
-(print "  (set 'brake-cutoff-release-threshold 0.1) - Change release threshold")
 
 ; Spawn UART reading frames thread
 (spawn 150 read-frames)

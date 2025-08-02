@@ -1,10 +1,11 @@
-; M365 dashboard compability lisp script v1.0 with M365 Brake Light - SAFE VERSION v2
+; M365 dashboard compability lisp script v1.0 with M365 Brake Light - SAFE VERSION v2 - SPEED MODE FIXED
 ; Based on original v1.0 by Netzpfuscher and 1zuna
 ; Added AUX brake light functionality that works with M365 display brake signal
 ; IMPROVED SAFETY FEATURES: 
 ; - Throttle cutoff with hysteresis to prevent flickering
 ; - Better signal filtering
 ; - Clearer logging of throttle vs brake duty cycles
+; FIXED: Speed mode parameter propagation to CAN devices
 ; UART Wiring: red=5V black=GND yellow=COM-TX (UART-HDX) green=COM-RX (button)+3.3V with 1K Resistor
 
 ; -> User parameters (change these to your needs)
@@ -214,6 +215,23 @@
     (print (str-from-n (get-duty) "Current duty cycle: %.2f"))
     (print (str-from-n (get-current) "Current motor current: %.2fA"))
     (print "====================")
+})
+
+; NEW: Speed mode debugging function
+(defun get-speed-mode-status () {
+    (print "=== Speed Mode Status ===")
+    (print (str-from-n speedmode "Current speedmode: %d"))
+    (if (= speedmode 1) (print "Mode: DRIVE"))
+    (if (= speedmode 2) (print "Mode: ECO"))
+    (if (= speedmode 4) (print "Mode: SPORT"))
+    (print (str-from-n unlock "Unlock mode: %d"))
+    (print (str-from-n off "Off state: %d"))
+    (print (str-from-n lock "Lock state: %d"))
+    (print "Current VESC Settings:")
+    (print (str-from-n (conf-get 'max-speed) "max-speed: %.2f m/s") (str-from-n (* (conf-get 'max-speed) 3.6) " (%.1f km/h)"))
+    (print (str-from-n (conf-get 'l-watt-max) "l-watt-max: %.0fW"))
+    (print (str-from-n (conf-get 'l-current-max-scale) "l-current-max-scale: %.2f"))
+    (print "========================")
 })
 
 (defun adc-input(buffer) ; Frame 0x65
@@ -491,12 +509,29 @@
     )
 )
 
+; FIXED: Now uses set-param to propagate settings to all CAN devices
 (defun configure-speed(speed watts current fw)
     {
-        (conf-set 'max-speed speed)
-        (conf-set 'l-watt-max watts)
-        (conf-set 'l-current-max-scale current)
-        (conf-set 'foc-fw-current-max fw)
+        (print (str-from-n speed "SPEED MODE: Setting max-speed to %.2f m/s") (str-from-n (* speed 3.6) " (%.1f km/h)"))
+        (print (str-from-n watts "SPEED MODE: Setting l-watt-max to %.0fW"))
+        (print (str-from-n current "SPEED MODE: Setting l-current-max-scale to %.2f"))
+        (set-param 'max-speed speed)
+        (set-param 'l-watt-max watts)
+        (set-param 'l-current-max-scale current)
+        (set-param 'foc-fw-current-max fw)
+    }
+)
+
+; NEW: Function to set parameters both locally and on all CAN devices
+(defun set-param (param value)
+    {
+        (conf-set param value)
+        (loopforeach id (can-list-devs)
+            (looprange i 0 5 {
+                (if (eq (rcode-run id 0.1 `(conf-set (quote ,param) ,value)) t) (break t))
+                false
+            })
+        )
     }
 )
 
@@ -575,18 +610,20 @@
 (apply-mode)
 
 ; Print startup message
-(print "M365 Dashboard V1 with M365 Brake Light - SAFE VERSION v2")
+(print "M365 Dashboard V1 with M365 Brake Light - SAFE VERSION v2 - SPEED MODE FIXED")
 (print "IMPROVED SAFETY FEATURES:")
 (print "- Throttle cutoff with hysteresis (no flickering)")
 (print "- Signal filtering for stable operation")
 (print "- Better brake light control")
 (print "- Enhanced debugging capabilities")
+(print "- FIXED: Speed mode parameter propagation to CAN devices")
 (print "Commands:")
 (print "  (test-m365-brake-light 0.5) - Test brake light")
 (print "  (test-throttle-cutoff 0.4 1.0) - Test throttle cutoff")
 (print "  (get-m365-brake-status) - Check brake status")
 (print "  (get-safety-status) - Check safety status")
 (print "  (get-signal-status) - Check signal values and motor status")
+(print "  (get-speed-mode-status) - Check current speed mode and VESC settings")
 (print "  (set 'brake-cutoff-enabled 0) - Disable throttle cutoff")
 (print "  (set 'brake-cutoff-threshold 0.2) - Change cutoff threshold")
 (print "  (set 'brake-cutoff-release-threshold 0.1) - Change release threshold")

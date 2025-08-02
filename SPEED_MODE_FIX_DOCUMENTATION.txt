@@ -1,0 +1,121 @@
+M365 DASHBOARD SPEED MODE FIX DOCUMENTATION
+===========================================
+
+PROBLEM IDENTIFIED:
+------------------
+The speed modes (ECO, DRIVE, SPORT) were not producing different outputs because 
+the configure-speed function was only setting parameters locally using conf-set, 
+but wasn't propagating these settings to CAN devices in a multi-VESC setup.
+
+ROOT CAUSE:
+----------
+In the original code, the configure-speed function was:
+
+(defun configure-speed(speed watts current fw)
+    {
+        (conf-set 'max-speed speed)
+        (conf-set 'l-watt-max watts)
+        (conf-set 'l-current-max-scale current)
+        (conf-set 'foc-fw-current-max fw)
+    }
+)
+
+This only sets parameters on the main VESC, but in setups with multiple VESCs 
+connected via CAN bus, the parameters need to be sent to all connected devices.
+
+SOLUTION IMPLEMENTED:
+--------------------
+1. Added a new set-param function that propagates settings to all CAN devices:
+
+(defun set-param (param value)
+    {
+        (conf-set param value)                    ; Set on main VESC
+        (loopforeach id (can-list-devs)          ; Loop through all CAN devices
+            (looprange i 0 5 {                   ; Retry up to 5 times
+                (if (eq (rcode-run id 0.1 `(conf-set (quote ,param) ,value)) t) 
+                    (break t)                     ; Break if successful
+                )
+                false
+            })
+        )
+    }
+)
+
+2. Modified configure-speed to use set-param instead of conf-set:
+
+(defun configure-speed(speed watts current fw)
+    {
+        (print (str-from-n speed "SPEED MODE: Setting max-speed to %.2f m/s") 
+               (str-from-n (* speed 3.6) " (%.1f km/h)"))
+        (print (str-from-n watts "SPEED MODE: Setting l-watt-max to %.0fW"))
+        (print (str-from-n current "SPEED MODE: Setting l-current-max-scale to %.2f"))
+        (set-param 'max-speed speed)              ; Now propagates to CAN devices
+        (set-param 'l-watt-max watts)
+        (set-param 'l-current-max-scale current)
+        (set-param 'foc-fw-current-max fw)
+    }
+)
+
+3. Added debug output to show when speed modes are being applied and what 
+   values are being set.
+
+4. Added a new debugging function get-speed-mode-status():
+
+(defun get-speed-mode-status () {
+    (print "=== Speed Mode Status ===")
+    (print (str-from-n speedmode "Current speedmode: %d"))
+    (if (= speedmode 1) (print "Mode: DRIVE"))
+    (if (= speedmode 2) (print "Mode: ECO"))
+    (if (= speedmode 4) (print "Mode: SPORT"))
+    (print (str-from-n unlock "Unlock mode: %d"))
+    (print (str-from-n off "Off state: %d"))
+    (print (str-from-n lock "Lock state: %d"))
+    (print "Current VESC Settings:")
+    (print (str-from-n (conf-get 'max-speed) "max-speed: %.2f m/s") 
+           (str-from-n (* (conf-get 'max-speed) 3.6) " (%.1f km/h)"))
+    (print (str-from-n (conf-get 'l-watt-max) "l-watt-max: %.0fW"))
+    (print (str-from-n (conf-get 'l-current-max-scale) "l-current-max-scale: %.2f"))
+    (print "========================")
+})
+
+FILES CREATED:
+--------------
+1. m365-display-vesc-ADC-AUXfiltered-FIXED.lisp - Fixed version with working speed modes
+2. SPEED_MODE_FIX_DOCUMENTATION.txt - This documentation file
+
+SPEED MODE VALUES:
+-----------------
+ECO Mode (speedmode 2):    7 km/h,  400W, 0.6 current scale
+DRIVE Mode (speedmode 1):  17 km/h, 500W, 0.7 current scale  
+SPORT Mode (speedmode 4):  21 km/h, 15000W (15kW), 1.0 current scale
+
+Secret modes (unlock mode enabled):
+Secret ECO:    27 km/h,  1200W, 0.8 current scale
+Secret DRIVE:  47 km/h,  1500W, 0.9 current scale
+Secret SPORT:  1000 km/h, 1500000W, 1.0 current scale
+
+BUTTON OPERATION:
+----------------
+- Single press: Toggle light (or turn on if off)
+- Double press (no brake): Cycle through speed modes (ECO->DRIVE->SPORT->ECO...)
+- Double press + brake: Toggle lock
+- Double press + brake + throttle: Toggle secret mode (if enabled)
+- Long press: Turn off scooter
+
+TESTING THE FIX:
+---------------
+1. Load the fixed code onto your VESC
+2. Run (get-speed-mode-status) to check current mode and settings
+3. Double-press button to change speed mode
+4. Run (get-speed-mode-status) again to verify the change
+5. Test actual performance to confirm different speed limits are working
+
+The debug output will now show when speed modes are applied and what values 
+are being set, making it easy to verify the fix is working.
+
+IMPORTANT NOTES:
+---------------
+- This fix is essential for multi-VESC setups connected via CAN bus
+- Even single VESC setups benefit from the improved debugging
+- The set-param function includes retry logic for reliable CAN communication
+- All existing functionality (brake light, safety features) remains unchanged 
